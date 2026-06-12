@@ -1,4 +1,46 @@
-/target
-.opencode/
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Build artifacts
+Cargo.lock
+!Cargo.lock.bak
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.settings/
+.classpath
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+/tmp/demidm.log
+
+# Environment
+.env
+.env.local
+
+# Testing
+coverage/
+*.gcno
+*.gcda
+lcov.info
+
+# Documentation
+docs/_build/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Local config
 AGENTS.md
-openspec/
