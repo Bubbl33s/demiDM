@@ -1,0 +1,24 @@
+[package]
+name = "demidm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ratatui = "0.26"
+crossterm = "0.27"
+tokio = { version = "1", features = ["full"] }
+nix = { version = "0.27", features = ["term", "process", "user", "signal"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = "0.3"
+thiserror = "1"
+mlua = { version = "0.9", features = ["lua54", "vendored", "send"] }
+secrecy = { version = "0.8", features = ["serde"] }
+zeroize = "1.7"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+image = { version = "0.25", features = ["png", "jpeg"] }
+memmap2 = "0.9"
+base64 = "0.22"
