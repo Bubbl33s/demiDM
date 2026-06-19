@@ -12,6 +12,7 @@ mod widget_runner;
 
 use std::fs::File;
 use std::io::stdout;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -106,8 +107,11 @@ fn parse_tty_path() -> String {
 
 #[tokio::main]
 async fn main() -> errors::AuraResult<()> {
-    let log_dir = "/tmp";
-    let file_appender = tracing_appender::rolling::daily(log_dir, "demidm.log");
+    let log_dir = std::env::var("DEMIDM_LOG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/var/log/demidm"));
+    std::fs::create_dir_all(&log_dir).ok();
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "demidm.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
     tracing_subscriber::fmt()
         .with_writer(non_blocking)
@@ -127,11 +131,11 @@ async fn main() -> errors::AuraResult<()> {
             errors::AuraError::SessionLaunch(format!("Failed to open {}: {}", tty_path, e))
         })?;
 
-    let original = setup_tty(&tty)?;
     install_panic_hook(
         tty.try_clone()
             .map_err(|e| errors::AuraError::SessionLaunch(e.to_string()))?,
     );
+    let original = setup_tty(&tty)?;
 
     info!("TTY setup complete");
 

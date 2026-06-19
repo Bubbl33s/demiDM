@@ -13,6 +13,14 @@ use crate::events::AppEvent;
 const PAM_SUCCESS: c_int = 0;
 #[allow(dead_code)]
 const PAM_PROMPT_ECHO_OFF: c_int = 2;
+#[allow(dead_code)]
+const PAM_PROMPT_ECHO_ON: c_int = 1;
+#[allow(dead_code)]
+const PAM_TEXT_INFO: c_int = 3;
+#[allow(dead_code)]
+const PAM_ERROR_MSG: c_int = 4;
+#[allow(dead_code)]
+const PAM_AUTHTOK_ERR: c_int = 20;
 
 #[allow(dead_code)]
 const PAM_AUTH_ERR: c_int = 7;
@@ -157,14 +165,11 @@ extern "C" {
     #[allow(dead_code)]
     fn pam_open_session(pamh: *mut c_void, flags: c_int) -> c_int;
     #[allow(dead_code)]
+    fn pam_close_session(pamh: *mut c_void, flags: c_int) -> c_int;
+    #[allow(dead_code)]
     fn pam_end(pamh: *mut c_void, pam_status: c_int) -> c_int;
     #[allow(dead_code)]
     fn pam_strerror(pamh: *mut c_void, errnum: c_int) -> *const c_char;
-}
-
-#[allow(dead_code)]
-struct PamCredentials {
-    password: String,
 }
 
 #[allow(dead_code)]
@@ -178,10 +183,14 @@ unsafe extern "C" fn pam_conv_fn(
         return PAM_CONV_ERR;
     }
 
-    let creds = &*(appdata_ptr as *const PamCredentials);
+    let password = if appdata_ptr.is_null() {
+        return PAM_CONV_ERR;
+    } else {
+        unsafe { CStr::from_ptr(appdata_ptr as *const c_char) }
+    };
 
     let responses =
-        libc::malloc(std::mem::size_of::<PamResponse>() * num_msg as usize) as *mut PamResponse;
+        libc::calloc(num_msg as usize, std::mem::size_of::<PamResponse>()) as *mut PamResponse;
     if responses.is_null() {
         return PAM_BUF_ERR;
     }
@@ -189,32 +198,52 @@ unsafe extern "C" fn pam_conv_fn(
     for i in 0..num_msg as usize {
         let msg_ptr = unsafe { *msg.add(i) };
         if msg_ptr.is_null() {
-            libc::free(responses as *mut c_void);
+            zero_and_free_responses(responses, i);
             return PAM_CONV_ERR;
         }
 
         let msg_ref = unsafe { &*msg_ptr };
-
-        if msg_ref.msg_style == PAM_PROMPT_ECHO_OFF {
-            let pwd = creds.password.clone();
-            let c_pwd = libc::strdup(pwd.as_ptr() as *const c_char);
-            unsafe {
-                (*responses.add(i)).resp = c_pwd;
-                (*responses.add(i)).resp_retcode = 0;
-            }
+        let msg_text = if !msg_ref.msg.is_null() {
+            unsafe { CStr::from_ptr(msg_ref.msg) }.to_string_lossy()
         } else {
-            unsafe {
-                (*responses.add(i)).resp = ptr::null_mut();
-                (*responses.add(i)).resp_retcode = 0;
-            }
+            std::borrow::Cow::Borrowed("(null)")
+        };
+
+        info!(
+            "PAM conversation message {}: style={}, text={}",
+            i, msg_ref.msg_style, msg_text
+        );
+
+        let c_pwd = libc::strdup(password.as_ptr());
+        if c_pwd.is_null() {
+            zero_and_free_responses(responses, i);
+            return PAM_BUF_ERR;
+        }
+        unsafe {
+            (*responses.add(i)).resp = c_pwd;
+            (*responses.add(i)).resp_retcode = 0;
         }
     }
 
     unsafe {
+        // Success path: PAM takes ownership of responses and is responsible for the eventual free.
         *resp = responses;
     }
 
     PAM_SUCCESS
+}
+
+unsafe fn zero_and_free_responses(responses: *mut PamResponse, count: usize) {
+    for j in 0..count {
+        let r = unsafe { &mut *responses.add(j) };
+        if !r.resp.is_null() {
+            let len = unsafe { libc::strlen(r.resp) };
+            unsafe { libc::explicit_bzero(r.resp as *mut c_void, len) };
+            unsafe { libc::free(r.resp as *mut c_void) };
+            r.resp = ptr::null_mut();
+        }
+    }
+    unsafe { libc::free(responses as *mut c_void) };
 }
 
 #[allow(dead_code)]
@@ -229,18 +258,26 @@ pub fn pam_authenticate_blocking(req: &PamRequest) -> Result<String, PamError> {
         message: format!("Invalid username: {}", e),
     })?;
 
-    let creds = PamCredentials {
-        password: req.password.expose_secret().to_string(),
-    };
+    let pwd = req.password.expose_secret();
+    let password_c = CString::new(pwd.as_str()).map_err(|e| PamError {
+        code: PamErrorCode::SystemError,
+        message: format!("Invalid password: {}", e),
+    })?;
+    info!(
+        "PAM: password length={}, is_empty={}",
+        pwd.len(),
+        pwd.is_empty()
+    );
 
     let conv = PamConv {
         conv: Some(pam_conv_fn),
-        appdata_ptr: &creds as *const PamCredentials as *mut c_void,
+        appdata_ptr: password_c.as_ptr() as *mut c_void,
     };
 
     let mut pamh: *mut c_void = ptr::null_mut();
 
     let status = unsafe { pam_start(service.as_ptr(), username_c.as_ptr(), &conv, &mut pamh) };
+    info!("pam_start returned status={}", status);
 
     if status != PAM_SUCCESS {
         let err_msg = unsafe {
@@ -256,6 +293,7 @@ pub fn pam_authenticate_blocking(req: &PamRequest) -> Result<String, PamError> {
     }
 
     let status = unsafe { pam_authenticate(pamh, 0) };
+    info!("pam_authenticate returned status={}", status);
 
     if status != PAM_SUCCESS {
         let err_msg = unsafe {
@@ -271,6 +309,7 @@ pub fn pam_authenticate_blocking(req: &PamRequest) -> Result<String, PamError> {
     }
 
     let status = unsafe { pam_acct_mgmt(pamh, 0) };
+    info!("pam_acct_mgmt returned status={}", status);
 
     if status != PAM_SUCCESS {
         let err_msg = unsafe {
@@ -286,6 +325,7 @@ pub fn pam_authenticate_blocking(req: &PamRequest) -> Result<String, PamError> {
     }
 
     let status = unsafe { pam_open_session(pamh, 0) };
+    info!("pam_open_session returned status={}", status);
 
     if status != PAM_SUCCESS {
         let err_msg = unsafe {
@@ -300,9 +340,13 @@ pub fn pam_authenticate_blocking(req: &PamRequest) -> Result<String, PamError> {
         });
     }
 
+    let result = Ok(req.username.clone());
+
+    unsafe { pam_close_session(pamh, 0) };
+    info!("pam_close_session called");
     unsafe { pam_end(pamh, PAM_SUCCESS) };
 
-    Ok(req.username.clone())
+    result
 }
 
 #[allow(dead_code)]
@@ -363,5 +407,10 @@ mod tests {
             PamErrorCode::PermDenied
         );
         assert_eq!(PamErrorCode::from(99), PamErrorCode::Unknown(99));
+    }
+
+    #[test]
+    fn test_pam_close_session_is_linked() {
+        let _fn_ptr: unsafe extern "C" fn(*mut c_void, c_int) -> c_int = pam_close_session;
     }
 }

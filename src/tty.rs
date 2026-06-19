@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::io::Write;
+use std::process::Command;
 use std::sync::Mutex;
 
 use nix::sys::termios::{self, Termios};
@@ -9,7 +10,13 @@ use crate::errors::AuraResult;
 static ORIGINAL_TERMIOS: Mutex<Option<Termios>> = Mutex::new(None);
 
 pub fn setup_tty(tty: &File) -> AuraResult<Termios> {
+    load_system_keymap();
+
     let original = termios::tcgetattr(tty)?;
+
+    if let Ok(mut guard) = ORIGINAL_TERMIOS.lock() {
+        *guard = Some(original.clone());
+    }
 
     let mut raw = original.clone();
     termios::cfmakeraw(&mut raw);
@@ -20,11 +27,23 @@ pub fn setup_tty(tty: &File) -> AuraResult<Termios> {
     write!(tty_writer, "\x1b[?1049h")?;
     tty_writer.flush()?;
 
-    if let Ok(mut guard) = ORIGINAL_TERMIOS.lock() {
-        *guard = Some(original.clone());
-    }
-
     Ok(original)
+}
+
+fn load_system_keymap() {
+    if let Ok(output) = Command::new("localectl").arg("status").output() {
+        let status = String::from_utf8_lossy(&output.stdout);
+        for line in status.lines() {
+            if line.contains("VC Keymap:") {
+                if let Some(keymap) = line.split("VC Keymap:").nth(1) {
+                    let keymap = keymap.trim();
+                    if !keymap.is_empty() && keymap != "n/a" {
+                        let _ = Command::new("loadkeys").arg(keymap).output();
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub fn restore_tty(tty: &File, original: Termios) -> AuraResult<()> {
