@@ -132,8 +132,7 @@ mod tests {
         std::env::remove_var("XDG_CONFIG_HOME");
 
         let result = resolve_config_path();
-        if result.is_some() {
-            let path = result.unwrap();
+        if let Some(path) = result {
             assert!(path.to_string_lossy().contains("/etc/demidm"));
         }
     }
