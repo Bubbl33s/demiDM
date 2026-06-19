@@ -45,6 +45,7 @@ pub struct AppState {
     pub notification: Option<String>,
     pub widgets: Vec<WidgetInstance>,
     pub fb_overlay: Option<FbOverlayHandle>,
+    pub auth_success_tick_counter: u64,
 }
 
 impl AppState {
@@ -59,6 +60,7 @@ impl AppState {
             notification: None,
             widgets: Vec::new(),
             fb_overlay: None,
+            auth_success_tick_counter: 0,
         }
     }
 }
@@ -123,7 +125,16 @@ pub fn apply_event(state: &mut AppState, event: AppEvent, tx: &Sender<AppEvent>)
             }
         }
         AppEvent::Resize(_, _) => {}
-        AppEvent::Tick => {}
+        AppEvent::Tick => {
+            if matches!(state.phase, AppPhase::AuthSuccess) {
+                state.auth_success_tick_counter += 1;
+                if state.auth_success_tick_counter >= 187 {
+                    state.phase = AppPhase::Idle;
+                    state.auth_success_tick_counter = 0;
+                    state.notification = None;
+                }
+            }
+        }
         AppEvent::Shutdown => {
             state.phase = AppPhase::Shutdown;
         }
@@ -135,9 +146,16 @@ pub fn apply_event(state: &mut AppState, event: AppEvent, tx: &Sender<AppEvent>)
         AppEvent::AuthSuccess { username } => {
             state.phase = AppPhase::AuthSuccess;
             state.auth_status = AuthStatus::Success;
-            let _ = username;
+            state.auth_success_tick_counter = 0;
+            let msg = format!("[DRY RUN] Would launch session for {}", username);
+            tracing::info!("{}", msg);
+            state.notification = Some(msg);
         }
-        AppEvent::AuthFailure { code: _, message } => {
+        AppEvent::AuthFailure {
+            username: _,
+            code: _,
+            message,
+        } => {
             state.phase = AppPhase::AuthFailure {
                 message: message.clone(),
             };
@@ -301,6 +319,51 @@ mod tests {
     }
 
     #[test]
+    fn test_auth_success_sets_dry_run_notification() {
+        let mut state = AppState::new();
+        state.phase = AppPhase::Authenticating;
+        let tx = test_sender();
+
+        apply_event(
+            &mut state,
+            AppEvent::AuthSuccess {
+                username: "alice".to_string(),
+            },
+            &tx,
+        );
+
+        assert_eq!(
+            state.notification.as_deref(),
+            Some("[DRY RUN] Would launch session for alice")
+        );
+    }
+
+    #[test]
+    fn test_auth_success_returns_to_idle_after_ticks() {
+        let mut state = AppState::new();
+        state.phase = AppPhase::Authenticating;
+        let tx = test_sender();
+
+        apply_event(
+            &mut state,
+            AppEvent::AuthSuccess {
+                username: "alice".to_string(),
+            },
+            &tx,
+        );
+        assert_eq!(state.phase, AppPhase::AuthSuccess);
+
+        for _ in 0..186 {
+            apply_event(&mut state, AppEvent::Tick, &tx);
+        }
+        assert_eq!(state.phase, AppPhase::AuthSuccess);
+
+        apply_event(&mut state, AppEvent::Tick, &tx);
+        assert_eq!(state.phase, AppPhase::Idle);
+        assert!(state.notification.is_none());
+    }
+
+    #[test]
     fn test_auth_failure_transition() {
         let mut state = AppState::new();
         state.phase = AppPhase::Authenticating;
@@ -309,6 +372,7 @@ mod tests {
         apply_event(
             &mut state,
             AppEvent::AuthFailure {
+                username: "alice".to_string(),
                 code: PamErrorCode::AuthError,
                 message: "Invalid password".to_string(),
             },

@@ -365,6 +365,7 @@ pub fn authenticate(req: PamRequest, tx: Sender<AppEvent>) {
         Err(err) => {
             error!("PAM auth failed for user {}: {}", username, err);
             let _ = tx.blocking_send(AppEvent::AuthFailure {
+                username: username.clone(),
                 code: err.code,
                 message: err.message,
             });

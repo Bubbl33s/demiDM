@@ -15,11 +15,18 @@ use crate::lua_runtime::hook_registry::{HookName, HookRegistry};
 use crate::widget::WidgetDef;
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum LuaCommand {
-    LoadConfig { path: PathBuf },
-    RunHook { hook: HookName },
-    UpdateWidget { widget_id: WidgetId },
+    LoadConfig {
+        path: PathBuf,
+    },
+    RunHook {
+        hook: HookName,
+        ctx: Vec<(String, String)>,
+    },
+    #[allow(dead_code)]
+    UpdateWidget {
+        widget_id: WidgetId,
+    },
 }
 
 pub struct LuaRuntimeHandle {
@@ -27,7 +34,6 @@ pub struct LuaRuntimeHandle {
 }
 
 impl LuaRuntimeHandle {
-    #[allow(dead_code)]
     pub fn send_command(&self, cmd: LuaCommand) -> Result<(), mpsc::error::SendError<LuaCommand>> {
         self.cmd_tx.try_send(cmd).map_err(|e| {
             tracing::warn!("Failed to send Lua command: {}", e);
@@ -88,8 +94,8 @@ fn run(
             LuaCommand::LoadConfig { path } => {
                 load_config(&lua, &path, &tx);
             }
-            LuaCommand::RunHook { hook } => {
-                invoke_hook(&lua, &hook_registry, hook, &tx);
+            LuaCommand::RunHook { hook, ctx } => {
+                invoke_hook(&lua, &hook_registry, hook, ctx, &tx);
             }
             LuaCommand::UpdateWidget { widget_id: _ } => {}
         }
@@ -127,6 +133,7 @@ fn invoke_hook(
     lua: &Lua,
     hook_registry: &Arc<Mutex<HookRegistry>>,
     hook: HookName,
+    ctx: Vec<(String, String)>,
     tx: &Sender<AppEvent>,
 ) {
     let reg = match hook_registry.lock() {
@@ -144,6 +151,12 @@ fn invoke_hook(
             return;
         }
     };
+
+    for (key, value) in ctx {
+        if let Err(e) = context.set(key, value) {
+            tracing::error!("Failed to set context field: {}", e);
+        }
+    }
 
     match reg.invoke(lua, hook, &context) {
         Ok(()) => {
@@ -177,6 +190,56 @@ mod tests {
         let event = rx.blocking_recv();
         assert!(event.is_some());
         assert!(matches!(event.unwrap(), AppEvent::ConfigLoaded));
+
+        drop(handle);
+        let _ = std::fs::remove_file(config_path);
+    }
+
+    #[test]
+    fn test_run_hook_fires_registered_on_startup_hook() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<AppEvent>(16);
+        let widget_defs = Arc::new(RwLock::new(Vec::<WidgetDef>::new()));
+
+        let tmp_dir = std::env::temp_dir();
+        let config_path = tmp_dir.join("test_hook_init.lua");
+        std::fs::write(
+            &config_path,
+            r#"
+            demidm.hooks.on_startup(function(ctx)
+                demidm.log.info("on_startup fired: tty=" .. tostring(ctx.tty_number))
+            end)
+            "#,
+        )
+        .unwrap();
+
+        let handle = spawn_lua_runtime(Some(config_path.clone()), tx, widget_defs);
+
+        let event = rx.blocking_recv();
+        assert!(matches!(event, Some(AppEvent::ConfigLoaded)));
+
+        handle
+            .send_command(LuaCommand::RunHook {
+                hook: HookName::OnStartup,
+                ctx: vec![
+                    ("tty_number".to_string(), "/dev/tty1".to_string()),
+                    ("hostname".to_string(), "testhost".to_string()),
+                    ("time".to_string(), "1234567890".to_string()),
+                ],
+            })
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let mut got_error = false;
+        while let Ok(event) = rx.try_recv() {
+            if matches!(event, AppEvent::ConfigError(_)) {
+                got_error = true;
+            }
+        }
+        assert!(
+            !got_error,
+            "Hook invocation should not produce a ConfigError"
+        );
 
         drop(handle);
         let _ = std::fs::remove_file(config_path);

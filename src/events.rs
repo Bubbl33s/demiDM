@@ -24,6 +24,7 @@ pub enum AppEvent {
         username: String,
     },
     AuthFailure {
+        username: String,
         code: PamErrorCode,
         message: String,
     },

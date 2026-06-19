@@ -25,6 +25,8 @@ use tracing::info;
 
 use crate::events::AppEvent;
 use crate::input::poller::run_input_poller;
+use crate::lua_runtime::hook_registry::HookName;
+use crate::lua_runtime::{LuaCommand, LuaRuntimeHandle};
 use crate::renderer::login_box::draw_login_box;
 use crate::renderer::widgets::draw_widgets;
 use crate::state::app_state::{apply_event, AppPhase, AppState};
@@ -32,8 +34,10 @@ use crate::tty::{install_panic_hook, setup_tty};
 
 async fn run_event_loop(
     tty: File,
+    tty_path: String,
     mut rx: mpsc::Receiver<AppEvent>,
     tx: mpsc::Sender<AppEvent>,
+    lua_handle: LuaRuntimeHandle,
 ) -> errors::AuraResult<()> {
     terminal::enable_raw_mode()?;
     let mut stdout_handle = stdout();
@@ -69,6 +73,52 @@ async fn run_event_loop(
                 let req = crate::auth::PamRequest::new(uname, pwd);
                 crate::auth::authenticate(req, worker_tx);
             });
+        }
+
+        match &event {
+            AppEvent::ConfigLoaded => {
+                let hostname = std::fs::read_to_string("/etc/hostname")
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_else(|_| "unknown".to_string());
+                let time = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs().to_string())
+                    .unwrap_or_else(|_| "0".to_string());
+                let _ = lua_handle.send_command(LuaCommand::RunHook {
+                    hook: HookName::OnStartup,
+                    ctx: vec![
+                        ("tty_number".to_string(), tty_path.clone()),
+                        ("hostname".to_string(), hostname),
+                        ("time".to_string(), time),
+                    ],
+                });
+            }
+            AppEvent::AuthSuccess { username } => {
+                let _ = lua_handle.send_command(LuaCommand::RunHook {
+                    hook: HookName::OnAuthSuccess,
+                    ctx: vec![("username".to_string(), username.clone())],
+                });
+            }
+            AppEvent::AuthFailure {
+                username,
+                code: _,
+                message,
+            } => {
+                let _ = lua_handle.send_command(LuaCommand::RunHook {
+                    hook: HookName::OnAuthFailure,
+                    ctx: vec![
+                        ("username".to_string(), username.clone()),
+                        ("error".to_string(), message.clone()),
+                    ],
+                });
+            }
+            AppEvent::Shutdown => {
+                let _ = lua_handle.send_command(LuaCommand::RunHook {
+                    hook: HookName::OnShutdown,
+                    ctx: vec![],
+                });
+            }
+            _ => {}
         }
 
         apply_event(&mut state, event, &tx);
@@ -159,9 +209,9 @@ async fn main() -> errors::AuraResult<()> {
     tokio::spawn(async move {
         widget_runner::run_widget_runner(runner_defs, runner_tx).await;
     });
-    let _lua_handle = lua_runtime::spawn_lua_runtime(config_path, lua_tx, widget_defs);
+    let lua_handle = lua_runtime::spawn_lua_runtime(config_path, lua_tx, widget_defs);
 
-    run_event_loop(tty, rx, tx).await?;
+    run_event_loop(tty, tty_path, rx, tx, lua_handle).await?;
 
     let _ = original;
     info!("DemiDM shutting down");
