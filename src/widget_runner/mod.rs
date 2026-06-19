@@ -128,4 +128,73 @@ mod tests {
         let result = execute_widget_source(&source).await;
         assert_eq!(result, "[lua_fn]");
     }
+
+    fn test_widget_def(id: &str, refresh: Duration, source: WidgetSource) -> WidgetDef {
+        use crate::errors::AbsolutePosition;
+        use crate::widget::WidgetStyle;
+
+        WidgetDef {
+            id: id.to_string(),
+            position: AbsolutePosition { col: 0, row: 0 },
+            width: 10,
+            height: None,
+            refresh,
+            source,
+            style: WidgetStyle::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_failing_widget_does_not_block_sibling() {
+        let widgets = Arc::new(RwLock::new(vec![
+            test_widget_def(
+                "bad",
+                Duration::ZERO,
+                WidgetSource::ShellCmd("nonexistent_command_xyz".to_string()),
+            ),
+            test_widget_def(
+                "good",
+                Duration::ZERO,
+                WidgetSource::StaticText("ok".to_string()),
+            ),
+        ]));
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<AppEvent>(16);
+        tokio::spawn(run_widget_runner(widgets, tx));
+
+        let mut updates: HashMap<WidgetId, String> = HashMap::new();
+        for _ in 0..2 {
+            let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+                .await
+                .expect("timed out waiting for widget update")
+                .expect("channel closed unexpectedly");
+            if let AppEvent::WidgetUpdate { id, content } = event {
+                updates.insert(id, content);
+            }
+        }
+
+        assert!(updates["bad"].starts_with("[error:"));
+        assert_eq!(updates["good"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_zero_refresh_widget_executes_exactly_once() {
+        let widgets = Arc::new(RwLock::new(vec![test_widget_def(
+            "w1",
+            Duration::ZERO,
+            WidgetSource::StaticText("hello".to_string()),
+        )]));
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<AppEvent>(16);
+        tokio::spawn(run_widget_runner(widgets, tx));
+
+        // Wait several runner ticks (RUNNER_TICK = 100ms) to prove the widget
+        // doesn't re-execute on subsequent ticks.
+        tokio::time::sleep(Duration::from_millis(450)).await;
+
+        let mut update_count = 0;
+        while let Ok(AppEvent::WidgetUpdate { .. }) = rx.try_recv() {
+            update_count += 1;
+        }
+
+        assert_eq!(update_count, 1);
+    }
 }

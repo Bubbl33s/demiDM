@@ -1,0 +1,9 @@
+# CI-ONLY test PAM service for automated testing of DemiDM's PAM integration.
+#
+# pam_permit.so accepts ANY username/password unconditionally and performs no
+# real credential or account checks. This file MUST only ever be installed on
+# an ephemeral CI runner (as /etc/pam.d/demidm-test) — never on a real machine,
+# and never as a replacement for /etc/pam.d/demidm.
+auth     required  pam_permit.so
+account  required  pam_permit.so
+session  required  pam_permit.so

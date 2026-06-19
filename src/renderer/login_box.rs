@@ -177,3 +177,116 @@ pub fn draw_login_box(frame: &mut Frame, state: &AppState, area: Rect) {
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    fn render(state: &AppState) -> ratatui::buffer::Buffer {
+        let area = Rect::new(0, 0, 80, 24);
+        let backend = TestBackend::new(area.width, area.height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw_login_box(f, state, area)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn test_theme_colors_propagate_to_rendered_border_and_title() {
+        let mut state = AppState::new();
+        state.config.theme.border_color = Color::Rgb(10, 20, 30);
+        state.config.theme.foreground = Color::Rgb(40, 50, 60);
+        state.config.login_box.title = "ZZTITLE".to_string();
+
+        let buffer = render(&state);
+        let area = Rect::new(0, 0, 80, 24);
+        let box_rect = positioned_rect(
+            state.config.login_box.width,
+            12,
+            area,
+            &state.config.login_box.position.x,
+            &state.config.login_box.position.y,
+        );
+
+        let corner_cell = buffer.get(box_rect.x, box_rect.y);
+        assert_eq!(corner_cell.fg, Color::Rgb(10, 20, 30));
+
+        let mut found_title = false;
+        for x in box_rect.x..(box_rect.x + box_rect.width) {
+            let cell = buffer.get(x, box_rect.y);
+            if cell.symbol() == "Z" {
+                assert_eq!(cell.fg, Color::Rgb(40, 50, 60));
+                found_title = true;
+                break;
+            }
+        }
+        assert!(
+            found_title,
+            "title text was not found in the top border row"
+        );
+    }
+
+    #[test]
+    fn test_layout_responds_to_login_box_config() {
+        let mut state = AppState::new();
+        state.config.login_box.width = 30;
+        state.config.login_box.position.x = AxisPosition::Absolute(2);
+        state.config.login_box.position.y = AxisPosition::Absolute(3);
+
+        let area = Rect::new(0, 0, 80, 24);
+        let expected_rect = positioned_rect(
+            state.config.login_box.width,
+            12,
+            area,
+            &state.config.login_box.position.x,
+            &state.config.login_box.position.y,
+        );
+
+        assert_eq!(expected_rect, Rect::new(2, 3, 30, 12));
+
+        // Rendering at the computed rect should not panic and should place the
+        // border's top-left corner exactly at the expected position.
+        let buffer = render(&state);
+        let corner_cell = buffer.get(expected_rect.x, expected_rect.y);
+        assert_ne!(corner_cell.symbol(), " ");
+    }
+
+    #[test]
+    fn test_password_field_is_always_masked() {
+        let mut state = AppState::new();
+        state.active_field = FocusTarget::Password;
+        for c in "supersecret".chars() {
+            state.password_field.push_char(c);
+        }
+
+        let buffer = render(&state);
+
+        let mut combined = String::new();
+        for cell in buffer.content() {
+            combined.push_str(cell.symbol());
+        }
+
+        assert!(!combined.contains("supersecret"));
+        assert!(combined.contains("***********"));
+    }
+
+    #[test]
+    fn test_password_field_masked_while_authenticating() {
+        let mut state = AppState::new();
+        state.active_field = FocusTarget::Password;
+        for c in "topsecret".chars() {
+            state.password_field.push_char(c);
+        }
+        state.phase = AppPhase::Authenticating;
+
+        let buffer = render(&state);
+
+        let mut combined = String::new();
+        for cell in buffer.content() {
+            combined.push_str(cell.symbol());
+        }
+
+        assert!(!combined.contains("topsecret"));
+    }
+}

@@ -248,7 +248,14 @@ unsafe fn zero_and_free_responses(responses: *mut PamResponse, count: usize) {
 
 #[allow(dead_code)]
 pub fn pam_authenticate_blocking(req: &PamRequest) -> Result<String, PamError> {
-    let service = CString::new("demidm").map_err(|e| PamError {
+    pam_authenticate_blocking_with_service(req, "demidm")
+}
+
+fn pam_authenticate_blocking_with_service(
+    req: &PamRequest,
+    service_name: &str,
+) -> Result<String, PamError> {
+    let service = CString::new(service_name).map_err(|e| PamError {
         code: PamErrorCode::SystemError,
         message: format!("Invalid service name: {}", e),
     })?;
@@ -413,5 +420,26 @@ mod tests {
     #[test]
     fn test_pam_close_session_is_linked() {
         let _fn_ptr: unsafe extern "C" fn(*mut c_void, c_int) -> c_int = pam_close_session;
+    }
+
+    // Requires `pam/demidm-test.pam` installed at `/etc/pam.d/demidm-test` (a
+    // pam_permit.so-based service with no real credential checks). CI installs it
+    // before running `cargo test -- --include-ignored`; not run by default locally.
+    #[test]
+    #[ignore]
+    fn test_pam_authenticate_against_test_service() {
+        let req = PamRequest::new(
+            "demidm-ci-test-user".to_string(),
+            SecretString::from("irrelevant".to_string()),
+        );
+
+        let result = pam_authenticate_blocking_with_service(&req, "demidm-test");
+
+        assert!(
+            result.is_ok(),
+            "pam_permit-based test service should always succeed: {:?}",
+            result.err()
+        );
+        assert_eq!(result.unwrap(), "demidm-ci-test-user");
     }
 }

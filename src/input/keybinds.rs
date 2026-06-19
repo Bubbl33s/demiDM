@@ -45,4 +45,31 @@ mod tests {
             Some(AppEvent::KeyPress(_))
         ));
     }
+
+    #[test]
+    fn test_backspace_maps_to_keypress() {
+        let key_event = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        assert!(matches!(
+            map_key_event(key_event),
+            Some(AppEvent::KeyPress(_))
+        ));
+    }
+
+    #[test]
+    fn test_backtab_maps_to_keypress() {
+        let key_event = KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE);
+        assert!(matches!(
+            map_key_event(key_event),
+            Some(AppEvent::KeyPress(_))
+        ));
+    }
+
+    #[test]
+    fn test_enter_maps_to_keypress() {
+        let key_event = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(matches!(
+            map_key_event(key_event),
+            Some(AppEvent::KeyPress(_))
+        ));
+    }
 }
