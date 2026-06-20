@@ -20,7 +20,7 @@ DemiDM provides a fast, secure, and customizable login experience with a TUI int
 
 - Linux kernel with framebuffer support
 - PAM (Pluggable Authentication Modules)
-- Rust 1.85+ (for building from source)
+- Rust 1.88+ (for building from source)
 
 ### Optional Dependencies
 

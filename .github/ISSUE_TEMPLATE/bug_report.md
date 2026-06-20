@@ -63,7 +63,7 @@ body:
       value: |
         - OS: [e.g., Arch Linux, Ubuntu 22.04]
         - Kernel: [e.g., 6.1.0]
-        - Rust version: [e.g., 1.85.0]
+        - Rust version: [e.g., 1.88.0]
         - DemiDM version: [e.g., 0.1.0 or commit hash]
     validations:
       required: true
