@@ -57,7 +57,7 @@ Use the [PR template](.github/PULL_REQUEST_TEMPLATE.md).
 
 ### Prerequisites
 
-- Rust 1.75 or later
+- Rust 1.85 or later
 - Linux system with PAM development libraries
 - pkg-config
 
